@@ -3,17 +3,112 @@ const SIZE = 720;
 const WIDTH = SIZE;
 const HEIGHT = SIZE;
 
-const BOOST_STRENGTH = 2;
+const BOOST_STRENGTH = 4;
 const BOOST_SHRINK = 0.99; // ~0.99
 
-const FUEL_PER_BLOB = 20
 
-const VERTICAL = false;
+let show_scores = true;
 
 let players = [];
 let blobs = [];
-
 let graphics = {};
+
+
+// key bindings (processed by function cleanKey)
+const WASD = {
+    UP: "W",
+    LEFT: "A",
+    DOWN: "S",
+    RIGHT: "D",
+    ROT_LEFT: "Q",
+    ROT_RIGHT: "E",
+    BOOST: "SPACE"
+}
+const IJKL = {
+    UP: "I",
+    LEFT: "J",
+    DOWN: "K",
+    RIGHT: "L",
+    ROT_LEFT: "U",
+    ROT_RIGHT: "O",
+    BOOST: "SLASH"
+}
+const NUMPAD = {
+    UP: "NUMPAD8",
+    LEFT: "NUMPAD4",
+    DOWN: "NUMPAD5",
+    RIGHT: "NUMPAD6",
+    ROT_LEFT: "NUMPAD7",
+    ROT_RIGHT: "NUMPAD9",
+    BOOST: "NUMPADENTER"
+}
+
+let useVerticalLayout = false;
+let searchParams;
+function preload() {
+    searchParams = new URLSearchParams(window.location.search);
+    useVerticalLayout = searchParams.has('vertical');
+}
+
+function setup() {
+    frameRate(60);
+    pcount = (searchParams.get('WASD') !== '') + (searchParams.get('IJKL') !== '') +  (searchParams.get('NUMPAD') !== '') //temp
+    let relSize = useVerticalLayout ? [1, 1 - (pcount-1)*0.2] : [1 - (pcount-1)*0.2, 1];
+    
+    if (searchParams.get('WASD'))
+        players.push(new Player(searchParams.get('WASD') ?? "Djungelskog", color("Magenta"), WASD, 1, relSize));
+    if (searchParams.get('IJKL'))
+        players.push(new Player(searchParams.get('IJKL') ?? "Blåhaj", color("MediumSpringGreen"), IJKL, 1, relSize));
+    if (searchParams.get('NUMPAD'))
+        players.push(new Player(searchParams.get('NUMPAD') ?? "Råtta", color("Tomato"), NUMPAD, 1, relSize));
+
+    if (players.length === 0) select('body').html('<img src="https://i.imgflip.com/7q0o8b.jpg" alt="No players? 💀">');
+
+    if (useVerticalLayout)
+        createCanvas(SIZE, players.reduce((acc, player) => acc + player.gHeight, 0));
+    else createCanvas(players.reduce((acc, player) => acc + player.gWidth, 0), SIZE);
+
+    noStroke();
+    logic();
+    setInterval(logic, 1000 / LOGIC_TPS);
+}
+
+function draw() {
+    let x = 0;    
+    let y = 0;    
+    players.forEach(player => {
+        player.updateGraphics();
+        image(player.graphics, x, y);
+        push()
+            noFill()
+            stroke("#551071")
+            strokeWeight(2)
+            rect(x, y, player.gWidth, player.gHeight)
+        pop()
+        if (useVerticalLayout)
+            y += player.gHeight;
+        else x += player.gWidth;
+    });
+
+    // show scores
+    if (show_scores){
+        push()
+        textAlign(LEFT, CENTER)
+        textSize(24);
+        textFont('Fredoka');
+        fill(255);
+        
+        leaderboard = [...players].sort((p1, p2) => p2.score - p1.score)
+        for (let i = 0; i < leaderboard.length; i++) {
+            push()
+                fill(leaderboard[i].color)
+                circle(30, 30 + i * 50, map(leaderboard[i].original_radius, 0, leaderboard[0].original_radius, 0, 35))
+            pop()
+            text(leaderboard[i].name, 60, 32 + i * 50);
+        }
+        pop()
+    }
+}
 
 class Drawable {
     constructor () {}
@@ -25,52 +120,58 @@ class Drawable {
 
 class Player extends Drawable {
 
-    constructor(name, color, posX, posY, keys) {
+    constructor(name, color, keys, scale = 1, relSize) {
         super()
         this.name = name;
         this.color = color;
-        this.posX = posX;
-        this.posY = posY;
 
+        this.gWidth = SIZE * relSize[0];
+        this.gHeight = SIZE * relSize[1];
+        this.scale = scale;
+        this.graphics = createGraphics(this.gWidth, this.gHeight);
+        this.graphics.noStroke()
+        this.keys = keys;
+
+        this.posX = SIZE/2 + random(-SIZE/3, SIZE/3);
+        this.posY = SIZE/2 + random(-SIZE/3, SIZE/3);
+        
         this.fuel = 100;
         this.boosting = false;
         this.original_radius = this.radius = 20;
         this.speed = 3;
         this.rotation = 0;
-        this.keys = keys; // 'UP' 'LEFT' 'DOWN' 'RIGHT' 'ROT_LEFT' 'ROT_RIGHT' 'BOOST'
+        this.score = 0;
 
-        this.graphics = createGraphics(SIZE, SIZE);
-        this.graphics.noStroke()
     }
 
     update() {
         this.rotation += (keysDown.has(this.keys['ROT_LEFT']) - keysDown.has(this.keys['ROT_RIGHT'])) * .05;
 
         let horizontal = keysDown.has(this.keys['RIGHT']) - keysDown.has(this.keys['LEFT']);  // -1 0 1
-        let vertical = keysDown.has(this.keys['DOWN']) - keysDown.has(this.keys['UP']);       // -1 0 1
+        let useVerticalLayout = keysDown.has(this.keys['DOWN']) - keysDown.has(this.keys['UP']);       // -1 0 1
         
         let boosting_mult = 1; 
         if (keysDown.has(this.keys['BOOST']) && this.fuel > 0){
             this.fuel -= 1;
             this.boosting = true;
             this.radius = clamp(this.radius * (BOOST_SHRINK), this.original_radius/4, this.original_radius)
-            boosting_mult = 2;
+            boosting_mult = BOOST_STRENGTH;
         } else {
             this.boosting = false;
             this.radius = clamp(this.radius * (1/BOOST_SHRINK), this.original_radius/4, this.original_radius);
         }
 
-        if (horizontal == 0 && vertical == 0) return;
+        if (horizontal == 0 && useVerticalLayout == 0) return;
         
         let angles = [];
         
         if (horizontal === -1) angles.push(PI);
         else if (horizontal === 1) angles.push(0);
-        if (vertical === -1) angles.push(PI/2);
-        else if (vertical === 1) angles.push(3 * PI / 2);
+        if (useVerticalLayout === -1) angles.push(PI/2);
+        else if (useVerticalLayout === 1) angles.push(3 * PI / 2);
 
         let movementAngle = this.rotation;
-        if (horizontal === 1 && vertical === 1)
+        if (horizontal === 1 && useVerticalLayout === 1)
             movementAngle += -PI/4;
         else movementAngle += angles.reduce((acc, angle) => acc + angle, 0) / angles.length;
 
@@ -84,8 +185,9 @@ class Player extends Drawable {
     updateGraphics() {
         this.graphics.background(0);
     
-        this.graphics.translate(WIDTH/2, HEIGHT/2);
+        this.graphics.translate(this.gWidth/2, this.gHeight/2);
         this.graphics.rotate(this.rotation);
+        this.graphics.scale(this.scale)
         
         this.graphics.fill(10, 0, waver(20, 10, cos));
         this.graphics.rect(0 - this.posX, 0 - this.posY, WIDTH, HEIGHT, 2 * this.radius);
@@ -101,9 +203,15 @@ class Player extends Drawable {
         this.graphics.resetMatrix();
     }
     
+    eat(whomst) {
+        this.score += whomst.score;
+        this.gainFuel(whomst.fuel);
+        this.original_radius += log(1 + whomst.radius)/10;
+    }
 
     getColor() {
-        return lerpColor(color(255), this.color, this.fuel / 100);
+        // return lerpColor(color(255), this.color, this.fuel / 100);
+        return lerpColor(color(0, 0, 0, 0), this.color, 0.2 + this.fuel/100 * 0.8); // less fuel -> less alpha, capped at 10%
     }
 
     gainFuel(amount) {
@@ -116,6 +224,8 @@ class Blob extends Drawable {
     constructor() {
         super();
         this.radius = 0.001;
+        this.score = 1;
+        this.fuel = 20;
         this.maxRadius = random(3, 8);
         let padding = this.maxRadius + 6
         this.posX = random(padding, WIDTH - padding);
@@ -131,8 +241,7 @@ class Blob extends Drawable {
         if (dist(this.posX, this.posY, player.posX, player.posY) > (player.radius - this.radius))
             return true;
         else {
-            player.gainFuel(FUEL_PER_BLOB);
-            player.original_radius += .2
+            player.eat(this)
             return false
         } 
     }
@@ -143,48 +252,6 @@ class Blob extends Drawable {
 
 }
 
-function setup() {
-    frameRate(60);
-    p1_keys = {
-        UP: 87,
-        LEFT: 65,
-        DOWN: 83,
-        RIGHT: 68,
-        ROT_LEFT: 81,
-        ROT_RIGHT: 69,
-        BOOST: 32
-    } // WASD QE SPACE
-    players.push(new Player("Player 1", color("green"), WIDTH/2 + random(-WIDTH/3, WIDTH/3), HEIGHT/2 + random(-HEIGHT/3, HEIGHT/3), p1_keys));
-    // p2_keys = {
-    //     UP: 104,
-    //     LEFT: 100,
-    //     DOWN: 101,
-    //     RIGHT: 102,
-    //     ROT_LEFT: 103,
-    //     ROT_RIGHT: 105,
-    //     BOOST: 13
-    // } // NUMPAD 8456 79 ENTER
-    // players.push(new Player("Player 2", color("blue"), WIDTH/2 + random(-WIDTH/3, WIDTH/3), HEIGHT/2 + random(-HEIGHT/3, HEIGHT/3), p2_keys));
-
-    p3_keys = {
-        UP: 73,
-        LEFT: 74,
-        DOWN: 75,
-        RIGHT: 76,
-        ROT_LEFT: 85,
-        ROT_RIGHT: 79,
-        BOOST: 191
-    } // IJKL UO /
-    players.push(new Player("Player 3", color("yellow"), WIDTH/2 + random(-WIDTH/3, WIDTH/3), HEIGHT/2 + random(-HEIGHT/3, HEIGHT/3), p3_keys));
-
-    if (VERTICAL)
-        createCanvas(SIZE, SIZE * players.length);
-    else createCanvas(SIZE * players.length, SIZE);
-
-    noStroke();
-    logic();
-    setInterval(logic, 1000 / LOGIC_TPS);
-}
 
 function logic() {
     players.forEach(player => {
@@ -197,24 +264,23 @@ function logic() {
 
 let second = 0;
 
-function draw() {
-    for (let i = 0; i < players.length; i++) {
-        players[i].updateGraphics()
-        if (VERTICAL)
-            image(players[i].graphics, 0, SIZE * i);
-        else image(players[i].graphics, SIZE * i, 0);
-    }
-}
-
 let keysDown = new Set();
 
-function keyPressed(e) {
-    // console.log(e)
-    keysDown.add(keyCode)
+function cleanKey(keyEvent) {
+    return keyEvent.code.replace(/^Key([A-Z])/, '$1').toUpperCase();
 }
 
-function keyReleased() {
-    keysDown.delete(keyCode)
+function keyPressed(e) {
+    e.preventDefault()
+    if(e.key === "-") return players.forEach(player => player.scale *= 0.9)
+    if(e.key === "+") return players.forEach(player => player.scale *= 1/0.9)
+    // console.log(cleanKey(e))
+    keysDown.add(cleanKey(e))
+
+}
+
+function keyReleased(e) {
+    keysDown.delete(cleanKey(e))
 }
 
 
@@ -229,5 +295,3 @@ function clamp(x, lower, higher) {
 function waver(base, mult, fun, speed=400) {
     return base + mult * fun(millis()/speed);
 }
-
-//TODO render a p5.Graphics for each player and put them side to side
